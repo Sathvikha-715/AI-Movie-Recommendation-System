@@ -1,120 +1,112 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from surprise import Dataset, Reader, SVD
-from surprise.model_selection import train_test_split
+
+# ===================== PAGE CONFIG =====================
+st.set_page_config(page_title="AI Movie Recommendation System", page_icon="🎬", layout="wide")
+
+st.title("🎬 AI Movie Recommendation System")
+st.markdown("Content-Based • Genre-Based • Hybrid Recommendation")
 
 # ===================== LOAD DATA =====================
-movies = pd.read_csv("movies.csv")  # Columns: movieId,title,genres
-ratings = pd.read_csv("ratings.csv")  # Columns: userId,movieId,rating,timestamp
+@st.cache_data
+def load_data():
+    movies = pd.read_csv("movies.csv")
+    ratings = pd.read_csv("ratings.csv")
+    return movies, ratings
 
-# ===================== CONTENT-BASED SETUP =====================
-count = CountVectorizer(token_pattern='[a-zA-Z0-9]+')
-genre_matrix = count.fit_transform(movies['genres'])
-cosine_sim = cosine_similarity(genre_matrix, genre_matrix)
+movies, ratings = load_data()
 
-# ===================== HELPER FUNCTIONS =====================
+# ===================== PREPROCESS =====================
+movies["genres"] = movies["genres"].fillna("")
 
-# Content-Based Recommendation (smart search + dropdown)
-def content_recommend(movie_title, n=5, exact=False):
-    if exact:
-        if movie_title not in movies['title'].values:
-            return ["Movie not found in dataset!"]
-        idx = movies[movies['title'] == movie_title].index[0]
-    else:
-        movie_title = movie_title.lower()
-        matches = movies[movies['title'].str.lower().str.contains(movie_title)]
-        if matches.empty:
-            return ["Movie not found in dataset!"]
-        actual_title = matches.iloc[0]['title']
-        idx = movies[movies['title'] == actual_title].index[0]
+# ===================== CONTENT-BASED MODEL =====================
+@st.cache_data
+def build_similarity():
+    cv = CountVectorizer(stop_words="english")
+    count_matrix = cv.fit_transform(movies["genres"])
+    similarity = cosine_similarity(count_matrix)
+    return similarity
 
-    sim_scores = list(enumerate(cosine_sim[idx]))
-    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
-    movie_indices = [i[0] for i in sim_scores[1:n+1]]
-    return movies['title'].iloc[movie_indices].tolist()
+similarity_matrix = build_similarity()
 
-# Collaborative Filtering (SVD)
-reader = Reader(rating_scale=(0.5, 5))
-data = Dataset.load_from_df(ratings[['userId','movieId','rating']], reader)
-trainset, testset = train_test_split(data, test_size=0.25)
-model = SVD()
-model.fit(trainset)
+indices = pd.Series(movies.index, index=movies["title"]).drop_duplicates()
 
-def collab_recommend(user_id, n=5):
-    movie_ids = ratings['movieId'].unique()
-    predictions = [model.predict(user_id, mid) for mid in movie_ids]
-    predictions.sort(key=lambda x: x.est, reverse=True)
-    top_movies = []
-    for p in predictions[:n]:
-        title = movies[movies['movieId'] == p.iid]['title'].values
-        if len(title) > 0:
-            top_movies.append(title[0])
-    return top_movies
+# ===================== RECOMMENDER FUNCTIONS =====================
+def recommend_content(title, n=5):
+    if title not in indices:
+        return []
 
-# Hybrid Recommendation
-def hybrid_recommend(movie_title, user_id, n=5):
-    content_movies = content_recommend(movie_title, n, exact=True)
-    collab_movies = collab_recommend(user_id, n)
-    hybrid = list(dict.fromkeys(content_movies + collab_movies))  # remove duplicates
-    return hybrid[:n]
+    idx = indices[title]
+    scores = list(enumerate(similarity_matrix[idx]))
+    scores = sorted(scores, key=lambda x: x[1], reverse=True)
+    scores = scores[1:n+1]
 
-# Genre-Based Recommendation
-all_genres = set()
-for g in movies['genres']:
-    for genre in g.split('|'):
-        all_genres.add(genre)
-all_genres = sorted(list(all_genres))
+    movie_indices = [i[0] for i in scores]
+    return movies["title"].iloc[movie_indices].tolist()
 
-def recommend_by_genre(selected_genre, n=10, min_rating=0):
-    genre_movies = movies[movies['genres'].str.contains(selected_genre)]
-    popular = ratings.merge(genre_movies, on="movieId")
-    top = popular.groupby("title")['rating'].mean()
-    top = top[top >= min_rating].sort_values(ascending=False).head(n)
-    return top.index.tolist()
+def recommend_genre(genre, n=5):
+    filtered = movies[movies["genres"].str.contains(genre, case=False, na=False)]
+    return filtered["title"].head(n).tolist()
 
-# ===================== STREAMLIT UI =====================
-st.set_page_config(page_title="AI Movie Recommender", layout="wide")
-st.title("🎬 AI Movie Recommendation System")
+def recommend_hybrid(title, n=5):
+    content_recs = recommend_content(title, n=20)
 
-option = st.radio("Choose Recommendation Type:", 
-                  ["Content-Based", "Collaborative Filtering", "Hybrid", "Genre-Based"])
+    avg_ratings = ratings.groupby("movieId")["rating"].mean().reset_index()
+    merged = movies.merge(avg_ratings, on="movieId", how="left")
 
-# -------------------- CONTENT-BASED --------------------
-if option == "Content-Based":
-    movie_name = st.selectbox("Choose a movie:", movies['title'].tolist())
+    candidates = merged[merged["title"].isin(content_recs)]
+    candidates = candidates.sort_values(by="rating", ascending=False)
+
+    return candidates["title"].head(n).tolist()
+
+# ===================== UI =====================
+st.subheader("Choose Recommendation Type:")
+
+rec_type = st.radio(
+    "",
+    ["Content-Based", "Genre-Based", "Hybrid"],
+    horizontal=True
+)
+
+st.divider()
+
+# ===================== CONTENT / HYBRID =====================
+if rec_type in ["Content-Based", "Hybrid"]:
+    movie_list = sorted(movies["title"].unique())
+    selected_movie = st.selectbox("Choose a movie:", movie_list)
+
     if st.button("Recommend"):
-        results = content_recommend(movie_name, exact=True)
+        if rec_type == "Content-Based":
+            recommendations = recommend_content(selected_movie)
+        else:
+            recommendations = recommend_hybrid(selected_movie)
+
         st.subheader("Recommended Movies:")
-        for movie in results:
-            st.write("⭐", movie)
+        if len(recommendations) == 0:
+            st.warning("Movie not found in dataset!")
+        else:
+            for movie in recommendations:
+                st.write("⭐", movie)
 
-# -------------------- COLLABORATIVE FILTERING --------------------
-elif option == "Collaborative Filtering":
-    user_id = st.number_input("Enter User ID (1-610):", min_value=1, max_value=610, step=1)
+# ===================== GENRE =====================
+elif rec_type == "Genre-Based":
+    all_genres = set()
+    for g in movies["genres"]:
+        for x in g.split("|"):
+            all_genres.add(x)
+
+    genre = st.selectbox("Choose a genre:", sorted(all_genres))
+
     if st.button("Recommend"):
-        results = collab_recommend(user_id)
+        recommendations = recommend_genre(genre)
+
         st.subheader("Recommended Movies:")
-        for movie in results:
+        for movie in recommendations:
             st.write("⭐", movie)
 
-# -------------------- HYBRID --------------------
-elif option == "Hybrid":
-    movie_name = st.selectbox("Choose a movie:", movies['title'].tolist())
-    user_id = st.number_input("Enter User ID (1-610):", min_value=1, max_value=610, step=1)
-    if st.button("Recommend"):
-        results = hybrid_recommend(movie_name, user_id)
-        st.subheader("Recommended Movies (Hybrid):")
-        for movie in results:
-            st.write("⭐", movie)
-
-# -------------------- GENRE-BASED --------------------
-elif option == "Genre-Based":
-    genre = st.selectbox("Select a Genre:", all_genres)
-    min_rating = st.slider("Minimum Rating:", 0.5, 5.0, 3.0, 0.5)
-    if st.button("Recommend"):
-        results = recommend_by_genre(genre, n=10, min_rating=min_rating)
-        st.subheader(f"Top {genre} Movies:")
-        for movie in results:
-            st.write("⭐", movie)
+# ===================== FOOTER =====================
+st.divider()
+st.caption("Built by Sathvikha Reddy • AI Movie Recommendation System")
