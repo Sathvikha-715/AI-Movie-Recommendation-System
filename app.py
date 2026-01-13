@@ -19,8 +19,9 @@ def load_data():
 
 movies, ratings = load_data()
 
-# ===================== PREPROCESS =====================
+# ===================== CLEAN DATA =====================
 movies["genres"] = movies["genres"].fillna("")
+ratings = ratings.dropna()
 
 # ===================== CONTENT-BASED MODEL =====================
 @st.cache_data
@@ -49,15 +50,26 @@ def recommend_content(title, n=5):
 
 def recommend_genre(genre, n=5):
     filtered = movies[movies["genres"].str.contains(genre, case=False, na=False)]
-    return filtered["title"].head(n).tolist()
+    if len(filtered) == 0:
+        return []
+    return filtered["title"].sample(min(n, len(filtered))).tolist()
 
 def recommend_hybrid(title, n=5):
-    content_recs = recommend_content(title, n=20)
+    if title not in indices:
+        return []
+
+    content_recs = recommend_content(title, n=30)
 
     avg_ratings = ratings.groupby("movieId")["rating"].mean().reset_index()
+
     merged = movies.merge(avg_ratings, on="movieId", how="left")
+    merged["rating"] = merged["rating"].fillna(0)
 
     candidates = merged[merged["title"].isin(content_recs)]
+
+    if len(candidates) == 0:
+        return []
+
     candidates = candidates.sort_values(by="rating", ascending=False)
 
     return candidates["title"].head(n).tolist()
@@ -86,7 +98,7 @@ if rec_type in ["Content-Based", "Hybrid"]:
 
         st.subheader("Recommended Movies:")
         if len(recommendations) == 0:
-            st.warning("Movie not found in dataset!")
+            st.warning("No recommendations found.")
         else:
             for movie in recommendations:
                 st.write("⭐", movie)
@@ -96,7 +108,8 @@ elif rec_type == "Genre-Based":
     all_genres = set()
     for g in movies["genres"]:
         for x in g.split("|"):
-            all_genres.add(x)
+            if x.strip() != "":
+                all_genres.add(x.strip())
 
     genre = st.selectbox("Choose a genre:", sorted(all_genres))
 
@@ -104,8 +117,11 @@ elif rec_type == "Genre-Based":
         recommendations = recommend_genre(genre)
 
         st.subheader("Recommended Movies:")
-        for movie in recommendations:
-            st.write("⭐", movie)
+        if len(recommendations) == 0:
+            st.warning("No movies found for this genre.")
+        else:
+            for movie in recommendations:
+                st.write("⭐", movie)
 
 # ===================== FOOTER =====================
 st.divider()
