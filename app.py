@@ -21,32 +21,39 @@ movies, ratings = load_data()
 
 # ===================== CLEAN DATA =====================
 movies["genres"] = movies["genres"].fillna("")
+movies["title"] = movies["title"].fillna("")
 ratings = ratings.dropna()
+
+# Create a combined text column (VERY IMPORTANT)
+movies["text"] = movies["title"] + " " + movies["genres"]
 
 # ===================== CONTENT-BASED MODEL =====================
 @st.cache_data
-def build_similarity():
+def build_similarity(data):
     cv = CountVectorizer(stop_words="english")
-    count_matrix = cv.fit_transform(movies["genres"])
+    count_matrix = cv.fit_transform(data["text"])
     similarity = cosine_similarity(count_matrix)
     return similarity
 
-similarity_matrix = build_similarity()
+similarity_matrix = build_similarity(movies)
 
 indices = pd.Series(movies.index, index=movies["title"]).drop_duplicates()
 
 # ===================== RECOMMENDER FUNCTIONS =====================
 def recommend_content(title, n=5):
-    if title not in indices:
+    try:
+        if title not in indices:
+            return []
+
+        idx = indices[title]
+        scores = list(enumerate(similarity_matrix[idx]))
+        scores = sorted(scores, key=lambda x: x[1], reverse=True)
+        scores = scores[1:n+1]
+
+        movie_indices = [i[0] for i in scores]
+        return movies["title"].iloc[movie_indices].tolist()
+    except:
         return []
-
-    idx = indices[title]
-    scores = list(enumerate(similarity_matrix[idx]))
-    scores = sorted(scores, key=lambda x: x[1], reverse=True)
-    scores = scores[1:n+1]
-
-    movie_indices = [i[0] for i in scores]
-    return movies["title"].iloc[movie_indices].tolist()
 
 def recommend_genre(genre, n=5):
     filtered = movies[movies["genres"].str.contains(genre, case=False, na=False)]
@@ -55,24 +62,23 @@ def recommend_genre(genre, n=5):
     return filtered["title"].sample(min(n, len(filtered))).tolist()
 
 def recommend_hybrid(title, n=5):
-    if title not in indices:
+    try:
+        content_recs = recommend_content(title, n=30)
+        if len(content_recs) == 0:
+            return []
+
+        avg_ratings = ratings.groupby("movieId")["rating"].mean().reset_index()
+        merged = movies.merge(avg_ratings, on="movieId", how="left")
+        merged["rating"] = merged["rating"].fillna(0)
+
+        candidates = merged[merged["title"].isin(content_recs)]
+        if len(candidates) == 0:
+            return []
+
+        candidates = candidates.sort_values(by="rating", ascending=False)
+        return candidates["title"].head(n).tolist()
+    except:
         return []
-
-    content_recs = recommend_content(title, n=30)
-
-    avg_ratings = ratings.groupby("movieId")["rating"].mean().reset_index()
-
-    merged = movies.merge(avg_ratings, on="movieId", how="left")
-    merged["rating"] = merged["rating"].fillna(0)
-
-    candidates = merged[merged["title"].isin(content_recs)]
-
-    if len(candidates) == 0:
-        return []
-
-    candidates = candidates.sort_values(by="rating", ascending=False)
-
-    return candidates["title"].head(n).tolist()
 
 # ===================== UI =====================
 st.subheader("Choose Recommendation Type:")
@@ -98,7 +104,7 @@ if rec_type in ["Content-Based", "Hybrid"]:
 
         st.subheader("Recommended Movies:")
         if len(recommendations) == 0:
-            st.warning("No recommendations found.")
+            st.warning("No recommendations found for this movie.")
         else:
             for movie in recommendations:
                 st.write("⭐", movie)
