@@ -25,3 +25,5 @@ It supports **Content-Based**, **Collaborative Filtering**, **Hybrid**, and **Ge
 ```bash
 git clone https://github.com/Sathvikha-715/AI-Movie-Recommendation-System.git
 cd AI-Movie-Recommendation-System
+## Live Demo
+https://ai-movie-recommendation-system-k9awvxhjg4mwhfsjmcndfy.streamlit.app/
