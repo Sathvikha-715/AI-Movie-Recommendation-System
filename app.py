@@ -7,7 +7,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 st.set_page_config(page_title="AI Movie Recommendation System", page_icon="🎬", layout="centered")
 
 st.title("🎬 AI Movie Recommendation System")
-st.write("Content-Based and Genre-Based Recommendation System")
+st.write("Content-Based and Genre-Based Movie Recommendation System")
 
 # ===================== LOAD DATA =====================
 @st.cache_data
@@ -15,15 +15,11 @@ def load_movies():
     movies = pd.read_csv("movies.csv")
     movies["title"] = movies["title"].astype(str)
     movies["genres"] = movies["genres"].fillna("")
+    movies = movies.reset_index(drop=True)
+    movies["text"] = movies["title"] + " " + movies["genres"]
     return movies
 
 movies = load_movies()
-
-# Reset index to avoid ALL index bugs
-movies = movies.reset_index(drop=True)
-
-# Create combined text for similarity
-movies["text"] = movies["title"] + " " + movies["genres"]
 
 # ===================== BUILD SIMILARITY =====================
 @st.cache_data
@@ -37,10 +33,11 @@ similarity = build_similarity(movies)
 
 # ===================== CONTENT RECOMMENDER =====================
 def recommend_content(movie_title, n=5):
-    if movie_title not in movies["title"].values:
+    matches = movies[movies["title"] == movie_title]
+    if len(matches) == 0:
         return []
 
-    idx = movies[movies["title"] == movie_title].index[0]
+    idx = matches.index[0]
     scores = list(enumerate(similarity[idx]))
     scores = sorted(scores, key=lambda x: x[1], reverse=True)
 
@@ -65,7 +62,7 @@ rec_type = st.radio(
 
 st.divider()
 
-# ===================== CONTENT =====================
+# ===================== CONTENT UI =====================
 if rec_type == "Content-Based":
     movie_list = sorted(movies["title"].unique())
     selected_movie = st.selectbox("Choose a movie:", movie_list)
@@ -80,11 +77,11 @@ if rec_type == "Content-Based":
             for m in recs:
                 st.write("⭐", m)
 
-# ===================== GENRE =====================
+# ===================== GENRE UI =====================
 elif rec_type == "Genre-Based":
     all_genres = set()
     for g in movies["genres"]:
-        for x in g.split("|"):
+        for x in str(g).split("|"):
             if x.strip():
                 all_genres.add(x.strip())
 
